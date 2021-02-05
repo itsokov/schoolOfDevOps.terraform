@@ -1,0 +1,99 @@
+---
+# tasks file for aws_helm_deploy
+- name: install kubectl repo  
+  yum_repository:
+    name: Kubernetes
+    description: Kubernetes repo
+    baseurl: https://packages.cloud.google.com/yum/repos/kubernetes-el7-x86_64
+    gpgkey: 
+     - "https://packages.cloud.google.com/yum/doc/yum-key.gpg"
+     - "https://packages.cloud.google.com/yum/doc/rpm-package-key.gpg"
+    gpgcheck: yes
+    repo_gpgcheck: yes
+
+- name: install kubectl
+  yum:
+    name: "kubectl"
+    state: present
+
+- name: Creates aws directory
+  file:
+    path: ~/.aws
+    state: directory
+
+- name: Creates .kube directory
+  file:
+    path: ~/.kube
+    state: directory
+
+- name: copy credentials file
+  copy:
+    src: ~/.aws/credentials
+    dest: ~/.aws/credentials
+  
+- name: copy kube credentials
+  template:
+    src: kubeconfig
+    dest: ~/.kube/config
+
+- name: install helm
+  shell: |
+      curl https://raw.githubusercontent.com/helm/helm/master/scripts/get-helm-3 | bash
+      warn=false
+  environment:
+       HELM_INSTALL_DIR: "/usr/bin"
+     
+- name: Add AWS Load Balancer Controller helm chart repo
+  community.kubernetes.helm_repository:
+    name: bitnami 
+    repo_url: "https://charts.bitnami.com/bitnami"
+
+- name: iIstall the external-dns helm release
+  community.kubernetes.helm:
+      name: externaldns
+      chart_ref: bitnami/external-dns
+      release_namespace: default
+      update_repo_cache: yes
+      wait: true
+      values:
+        provider: aws
+        domainFilters: 
+          - "{{ registered_domain }}"
+        policy: sync
+        registry: txt
+        txtOwnerId: "{{ dns_zone_id }}"
+        interval: "3m"
+
+
+- name: Deploy latest version wordpress
+  community.kubernetes.helm:
+    name: wordpress
+    chart_ref: bitnami/wordpress
+    release_namespace: default
+    update_repo_cache: yes
+    wait: true
+    values:
+      service:
+        annotations: 
+          "external-dns.alpha.kubernetes.io/hostname": "{{ external_dns }}"
+      replicas: 1
+
+- name: Get SVC
+  command:
+    cmd: kubectl get svc --namespace default wordpress --template '{{ '{{' }} range (index .status.loadBalancer.ingress 0) {{ '}}' }}{{ '{{' }}.{{ '}}' }}{{ '{{' }} end {{ '}}' }}'
+  register: ELB
+  ignore_errors: True
+
+- name: Get wordpress Admin credentials
+  shell: kubectl get secret --namespace default wordpress -o jsonpath="{.data.wordpress-password}" | base64 --decode
+  register: wordpress_credentials
+  ignore_errors: True
+  
+- debug: 
+    msg: "ELB Endpoint {{ ELB.stdout }}"
+  ignore_errors: True
+
+- debug: 
+    msg: "Admin wordpress password for username user is {{ wordpress_credentials.stdout }}"
+  ignore_errors: True
+
