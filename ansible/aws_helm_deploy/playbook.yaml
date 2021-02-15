@@ -4,4 +4,4 @@
   remote_user: ec2-user
   become_user: root
   roles:
-     - .
+     - ../aws_helm_deploy
